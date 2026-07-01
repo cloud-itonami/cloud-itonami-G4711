@@ -8,6 +8,14 @@ inventory management, barcode validation, point-of-sale, and replenishment —
 run by a qualified operator so a local shop keeps its own sales and stock
 data instead of renting a closed POS SaaS.
 
+## Robotics premise
+
+All cloud-itonami verticals are designed on the premise that a **robot performs
+the physical domain work**. Here a store robot performs shelfing, picking, restocking and point-of-sale handling under an actor that proposes
+actions and an independent **Retail Governor** that gates them. The governor never
+dispatches hardware itself; `:high`/`:safety-critical` actions require
+human sign-off.
+
 ## Core Contract
 
 ```text
