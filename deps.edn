@@ -13,7 +13,12 @@
  :deps {io.github.kotoba-lang/langgraph
         {:local/root "../../kotoba-lang/langgraph"}
         io.github.kotoba-lang/retail
-        {:local/root "../../kotoba-lang/retail"}}
+        {:local/root "../../kotoba-lang/retail"}
+        ;; langchain-store: the shared langchain.db store seam (EDN-blob
+        ;; codec + identity schema + event-log helpers) that ~190 actors
+        ;; hand-roll; retailops.store is an adopter (ADR-2607141600).
+        io.github.kotoba-lang/langchain-store
+        {:local/root "../../kotoba-lang/langchain-store"}}
  :aliases
  {;; offline workspace dev -- pin transitive langchain to local checkout
   :dev {:override-deps

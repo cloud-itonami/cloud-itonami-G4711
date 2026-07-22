@@ -37,10 +37,9 @@
   immutable log -- the audit trail a customer or supplier trusting a
   retail shop needs, and the evidence an operator needs if a sale or a
   reorder is later disputed."
-  (:require #?(:clj  [clojure.edn :as edn]
-               :cljs [cljs.reader :as edn])
-            [retailops.registry :as registry]
-            [langchain.db :as d]))
+  (:require [retailops.registry :as registry]
+            [langchain.db :as d]
+            [langchain-store.core :as ls]))
 
 (defprotocol Store
   (order [s id])
@@ -198,17 +197,14 @@
   Map/compound values (assessment payloads, ledger facts,
   sale/reorder records) are stored as EDN strings so `langchain.db`
   doesn't expand them into sub-entities -- the same convention every
-  sibling actor's store uses."
-  {:order/id                {:db/unique :db.unique/identity}
-   :assessment/order-id     {:db/unique :db.unique/identity}
-   :ledger/seq              {:db/unique :db.unique/identity}
-   :sale/seq                {:db/unique :db.unique/identity}
-   :reorder/seq             {:db/unique :db.unique/identity}
-   :sale-sequence/jurisdiction    {:db/unique :db.unique/identity}
-   :reorder-sequence/jurisdiction {:db/unique :db.unique/identity}})
-
-(defn- enc [v] (pr-str v))
-(defn- dec* [s] (when s (edn/read-string s)))
+  sibling actor's store uses. The identity-schema builder, EDN-blob
+  codec and seq-keyed event-log read/append are the shared
+  kotoba-lang/langchain-store machinery (ADR-2607141600) -- the seam
+  ~190 actors hand-roll; this store keeps only its domain wiring."
+  (ls/identity-schema
+   [:order/id :assessment/order-id
+    :ledger/seq :sale/seq :reorder/seq
+    :sale-sequence/jurisdiction :reorder-sequence/jurisdiction]))
 
 (defn- order->tx [{:keys [id kind sku-id sku-name ean13 unit-price quantity claimed-total
                          price-band-min price-band-max current-stock reorder-at
@@ -260,21 +256,12 @@
          (map #(pull->order (d/pull (d/db conn) order-pull [:order/id %])))
          (sort-by :id)))
   (assessment-of [_ order-id]
-    (dec* (d/q '[:find ?p . :in $ ?oid
+    (ls/dec* (d/q '[:find ?p . :in $ ?oid
                 :where [?a :assessment/order-id ?oid] [?a :assessment/payload ?p]]
               (d/db conn) order-id)))
-  (ledger [_]
-    (->> (d/q '[:find ?s ?f :where [?e :ledger/seq ?s] [?e :ledger/fact ?f]] (d/db conn))
-         (sort-by first)
-         (mapv (comp dec* second))))
-  (sale-history [_]
-    (->> (d/q '[:find ?s ?r :where [?e :sale/seq ?s] [?e :sale/record ?r]] (d/db conn))
-         (sort-by first)
-         (mapv (comp dec* second))))
-  (reorder-history [_]
-    (->> (d/q '[:find ?s ?r :where [?e :reorder/seq ?s] [?e :reorder/record ?r]] (d/db conn))
-         (sort-by first)
-         (mapv (comp dec* second))))
+  (ledger [_] (ls/read-stream conn :ledger/seq :ledger/fact))
+  (sale-history [_] (ls/read-stream conn :sale/seq :sale/record))
+  (reorder-history [_] (ls/read-stream conn :reorder/seq :reorder/record))
   (next-sale-sequence [_ jurisdiction]
     (or (d/q '[:find ?n . :in $ ?j
               :where [?e :sale-sequence/jurisdiction ?j] [?e :sale-sequence/next ?n]]
@@ -295,7 +282,7 @@
       (d/transact! conn [(order->tx value)])
 
       :assessment/set
-      (d/transact! conn [{:assessment/order-id (first path) :assessment/payload (enc payload)}])
+      (d/transact! conn [{:assessment/order-id (first path) :assessment/payload (ls/enc payload)}])
 
       :order/mark-sold
       (let [order-id (first path)
@@ -305,7 +292,7 @@
         (d/transact! conn
                      [(order->tx (assoc order-patch :id order-id))
                       {:sale-sequence/jurisdiction jurisdiction :sale-sequence/next next-n}
-                      {:sale/seq (count (sale-history s)) :sale/record (enc (get result "record"))}])
+                      {:sale/seq (count (sale-history s)) :sale/record (ls/enc (get result "record"))}])
         result)
 
       :order/mark-reordered
@@ -316,12 +303,12 @@
         (d/transact! conn
                      [(order->tx (assoc order-patch :id order-id))
                       {:reorder-sequence/jurisdiction jurisdiction :reorder-sequence/next next-n}
-                      {:reorder/seq (count (reorder-history s)) :reorder/record (enc (get result "record"))}])
+                      {:reorder/seq (count (reorder-history s)) :reorder/record (ls/enc (get result "record"))}])
         result)
       nil)
     s)
   (append-ledger! [s fact]
-    (d/transact! conn [{:ledger/seq (count (ledger s)) :ledger/fact (enc fact)}])
+    (ls/append-blob! conn :ledger/seq :ledger/fact (count (ledger s)) fact)
     fact)
   (with-orders [s orders]
     (when (seq orders) (d/transact! conn (mapv order->tx (vals orders)))) s))
